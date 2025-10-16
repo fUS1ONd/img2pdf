@@ -10,6 +10,9 @@ import (
 // Идея: сделать так, чтобы утилита либо создавала с нуля (нужно проверять название output на предмет существования)
 // либо чтобы утилита наслаивала на существующий output
 
+// -order=mod
+// -order=nam
+// -order=seq (default)
 func main() {
 	var (
 		input  = flag.String("i", "", "Input directory or JPG files (space-separated)")
@@ -38,23 +41,28 @@ func main() {
 	fmt.Printf("Successfully converted to %s\n", *output)
 }
 
-// TODO: Добавить пояснение про order
 func printUsage() {
 	fmt.Println("Image to PDF Converter")
 	fmt.Println("\nSupported formats: JPG, JPEG, PNG, WEBP, TIFF")
 	fmt.Println("\nUsage:")
-	fmt.Println("  jpg2pdf -input <directory|files> -output <pdf_file>")
+	fmt.Println("  ./img2pdf -i <directory|files> -o <pdf_file> -order <order type>")
 	fmt.Println("\nExamples:")
-	fmt.Println("  jpg2pdf -input ./images -output result.pdf")
-	fmt.Println("  jpg2pdf -input \"image1.jpg,photo.png,scan.tiff\" -output result.pdf")
+	fmt.Println("  ./img2pdf -i images/")
+	fmt.Println("  ./img2pdf -i \"image1.jpg,photo.png,scan.tiff\" -o result.pdf")
+	fmt.Println("  ./img2pdf -i \"images/,photo.jpg,scan.png\" -o result.pdf -order mod")
+	fmt.Println("\nNote: The -i flag accepts both directories and individual files (comma-separated)")
 	fmt.Println("\nOptions:")
-	flag.PrintDefaults()
+	fmt.Println("  -i string")
+	fmt.Println("    \tInput directory or JPG files (space-separated)")
+	fmt.Println("  -o string")
+	fmt.Println("    \tOutput PDF file path (default \"output.pdf\")")
+	fmt.Println("  -order string")
+	fmt.Println("    \tSorting order for images: seq (sequential), nam (by name), mod (by modification time) (default \"seq\")")
+	fmt.Println("  -help")
+	fmt.Println("    \tShow this help message")
 }
 
 func printInputHelp() {
-	fmt.Println("Image to PDF Converter")
-
-	fmt.Println("\nUsage:")
-	fmt.Println("  ./jpg2pdf -i \"image1.jpg,photo.png,scan.tiff\" -o result.pdf")
-	fmt.Println("  ./jpg2pdf -i ./images -o result.pdf")
+	fmt.Println("Usage:")
+	fmt.Println("  ./img2pdf -i <directory|files> -o <pdf_file> -order <order type>")
 }
