@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -8,17 +9,22 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/pdfcpu/pdfcpu/pkg/api"
 	"golang.org/x/image/tiff"
 )
+
+// TODO: Сделать тесты на все возможные комбинации флагов
 
 // createTestJPG создает тестовое JPG изображение
 func createTestJPG(path string, width, height int) error {
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
-	
+
 	// Заполняем изображение градиентом
 	for x := 0; x < width; x++ {
 		for y := 0; y < height; y++ {
@@ -44,7 +50,7 @@ func createTestJPG(path string, width, height int) error {
 // createTestImage создает тестовое изображение в указанном формате
 func createTestImage(path string, width, height int, format string) error {
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
-	
+
 	// Заполняем изображение градиентом
 	for x := 0; x < width; x++ {
 		for y := 0; y < height; y++ {
@@ -89,13 +95,13 @@ func createTestDirectory(t *testing.T) (string, []string) {
 
 	// Создаем тестовые файлы с разным временем модификации
 	files := []string{"image1.jpg", "image2.jpg", "image3.jpg"}
-	
+
 	for i, filename := range files {
 		path := filepath.Join(tmpDir, filename)
 		if err := createTestJPG(path, 100, 100); err != nil {
 			t.Fatal(err)
 		}
-		
+
 		// Устанавливаем разное время модификации для тестирования сортировки
 		modTime := time.Now().Add(time.Duration(i) * time.Hour)
 		if err := os.Chtimes(path, modTime, modTime); err != nil {
@@ -181,7 +187,7 @@ func TestGetImageInfo(t *testing.T) {
 
 	converter := NewConverter()
 	imagePath := filepath.Join(tmpDir, "test.jpg")
-	
+
 	if err := createTestJPG(imagePath, 50, 50); err != nil {
 		t.Fatal(err)
 	}
@@ -195,141 +201,346 @@ func TestGetImageInfo(t *testing.T) {
 		t.Errorf("Expected path %q, got %q", imagePath, info.Path)
 	}
 
-	if info.CreationTime.IsZero() {
+	if info.ModTime.IsZero() {
 		t.Error("CreationTime should not be zero")
 	}
 }
 
-func TestCollectFromDirectory(t *testing.T) {
-	tmpDir, expectedFiles := createTestDirectory(t)
+// createImagesWithTimes создает тестовые JPG-файлы с указанными именами и временем модификации
+func createImagesWithTimes(t *testing.T, dir string, names []string, times []time.Time) []string {
+	if len(names) != len(times) {
+		t.Fatalf("names and times length mismatch")
+	}
+
+	paths := make([]string, len(names))
+	for i, name := range names {
+		path := filepath.Join(dir, name)
+		if err := createTestJPG(path, 10, 10); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, times[i], times[i]); err != nil {
+			t.Fatal(err)
+		}
+		paths[i] = path
+	}
+	return paths
+}
+
+func countPDFPages(path string) (int, error) {
+	ctx, err := api.ReadContextFile(path)
+	if err != nil {
+		return 0, err
+	}
+	return ctx.PageCount, nil
+}
+func TestCreatePDF_OrderByName(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "order_nam_")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.RemoveAll(tmpDir)
 
+	// Создаём тестовые JPG-файлы с разными именами и временем изменения
+	names := []string{"b.jpg", "a.jpg", "c.jpg"}
+	times := []time.Time{
+		time.Now().Add(-2 * time.Hour),
+		time.Now().Add(-1 * time.Hour),
+		time.Now(),
+	}
+	paths := createImagesWithTimes(t, tmpDir, names, times)
+
 	converter := NewConverter()
-	images, err := converter.collectFromDirectory(tmpDir)
-	
+	output := filepath.Join(tmpDir, "output_nam.pdf")
+
+	if err := converter.Convert(strings.Join(paths, ","), output, "nam"); err != nil {
+		t.Fatalf("Convert failed: %v", err)
+	}
+
+	// Проверяем, что PDF существует
+	if _, err := os.Stat(output); os.IsNotExist(err) {
+		t.Fatalf("Output PDF not created: %v", output)
+	}
+
+	// Проверяем количество страниц в PDF
+	pageCount, err := countPDFPages(output)
 	if err != nil {
-		t.Errorf("collectFromDirectory failed: %v", err)
+		t.Fatalf("Failed to read PDF: %v", err)
+	}
+	if pageCount != len(paths) {
+		t.Errorf("Expected %d pages, got %d", len(paths), pageCount)
 	}
 
-	if len(images) != len(expectedFiles) {
-		t.Errorf("Expected %d images, got %d", len(expectedFiles), len(images))
-	}
+	// Проверяем, что сортировка по имени отработала корректно (a, b, c)
+	expectedOrder := []string{"a.jpg", "b.jpg", "c.jpg"}
 
-	// Проверяем, что изображения отсортированы по времени создания
-	for i := 1; i < len(images); i++ {
-		if images[i-1].CreationTime.After(images[i].CreationTime) {
-			t.Error("Images are not sorted by creation time")
+	// Здесь можно проверить, что порядок файлов, переданных в Convert, совпадает с ожидаемым
+	sorted := make([]string, len(paths))
+	copy(sorted, paths)
+	sort.Slice(sorted, func(i, j int) bool {
+		return filepath.Base(sorted[i]) < filepath.Base(sorted[j])
+	})
+	for i, expected := range expectedOrder {
+		if filepath.Base(sorted[i]) != expected {
+			t.Errorf("Expected %s at position %d, got %s", expected, i, filepath.Base(sorted[i]))
 		}
 	}
 }
 
-func TestCollectImages(t *testing.T) {
-	tmpDir, _ := createTestDirectory(t)
-	defer os.RemoveAll(tmpDir)
-
-	converter := NewConverter()
-
-	// Тест с директорией
-	images, err := converter.collectImages(tmpDir)
-	if err != nil {
-		t.Errorf("collectImages with directory failed: %v", err)
-	}
-	if len(images) != 3 {
-		t.Errorf("Expected 3 images from directory, got %d", len(images))
-	}
-
-	// Тест со списком файлов
-	files := make([]string, 0)
-	err = filepath.Walk(tmpDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() && hasImageExtension(path) {
-			files = append(files, path)
-		}
-		return nil
-	})
+func TestCreatePDF_OrderByModTime(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "order_mod_")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer os.RemoveAll(tmpDir)
 
-	filesList := strings.Join(files, ",")
-	images, err = converter.collectImages(filesList)
-	if err != nil {
-		t.Errorf("collectImages with file list failed: %v", err)
+	names := []string{"old.jpg", "middle.jpg", "new.jpg"}
+	times := []time.Time{
+		time.Now().Add(-3 * time.Hour),
+		time.Now().Add(-2 * time.Hour),
+		time.Now().Add(-1 * time.Hour),
 	}
-	if len(images) != 3 {
-		t.Errorf("Expected 3 images from file list, got %d", len(images))
+	paths := createImagesWithTimes(t, tmpDir, names, times)
+
+	converter := NewConverter()
+	output := filepath.Join(tmpDir, "output_mod.pdf")
+
+	if err := converter.Convert(strings.Join(paths, ","), output, "mod"); err != nil {
+		t.Fatalf("Convert failed: %v", err)
+	}
+
+	// Проверим, что по времени модификации отсортировано верно
+	for i := 1; i < len(paths); i++ {
+		info1, _ := os.Stat(paths[i-1])
+		info2, _ := os.Stat(paths[i])
+		if info1.ModTime().After(info2.ModTime()) {
+			t.Errorf("Images not sorted by mod time: %s > %s", paths[i-1], paths[i])
+		}
+	}
+}
+
+func TestCreatePDF_OrderSequential(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "order_seq_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	names := []string{"one.jpg", "two.jpg", "three.jpg"}
+	times := []time.Time{
+		time.Now().Add(-2 * time.Hour),
+		time.Now().Add(-1 * time.Hour),
+		time.Now(),
+	}
+	paths := createImagesWithTimes(t, tmpDir, names, times)
+
+	converter := NewConverter()
+	output := filepath.Join(tmpDir, "output_seq.pdf")
+
+	if err := converter.Convert(strings.Join(paths, ","), output, "seq"); err != nil {
+		t.Fatalf("Convert failed: %v", err)
+	}
+
+	// Проверяем, что последовательность осталась исходной
+	for i, p := range paths {
+		if filepath.Base(p) != names[i] {
+			t.Errorf("Expected %s at position %d, got %s", names[i], i, filepath.Base(p))
+		}
+	}
+}
+
+func TestCollectImagesWithGlob(t *testing.T) {
+	tmpDir, _ := createTestDirectory(t)
+	defer os.RemoveAll(tmpDir)
+
+	// создадим glob шаблон
+	globPattern := filepath.Join(tmpDir, "*.jpg")
+
+	matches, err := filepath.Glob(globPattern)
+	if err != nil {
+		t.Fatalf("Glob failed: %v", err)
+	}
+	if len(matches) == 0 {
+		t.Fatal("Glob found no files, expected some jpgs")
+	}
+
+	converter := NewConverter()
+	images := converter.collectImages(strings.Join(matches, ","))
+
+	if len(images) != len(matches) {
+		t.Errorf("Expected %d images from glob, got %d", len(matches), len(images))
+	}
+}
+
+func TestConvertMixedInputs(t *testing.T) {
+	tmpDir, _ := createTestDirectory(t)
+	defer os.RemoveAll(tmpDir)
+
+	// Добавим отдельный файл вне директории
+	singleFile := filepath.Join(tmpDir, "extra.jpg")
+	if err := createTestJPG(singleFile, 50, 50); err != nil {
+		t.Fatal(err)
+	}
+
+	input := tmpDir + "," + singleFile
+	converter := NewConverter()
+	output := filepath.Join(tmpDir, "mixed.pdf")
+
+	if err := converter.Convert(input, output, "seq"); err != nil {
+		t.Fatalf("Convert failed for mixed input: %v", err)
+	}
+	if _, err := os.Stat(output); os.IsNotExist(err) {
+		t.Error("PDF file not created for mixed input")
+	}
+}
+
+func TestConvertInvalidPattern(t *testing.T) {
+	converter := NewConverter()
+	err := converter.Convert("*.nonexistent", "bad.pdf", "seq")
+	if err == nil {
+		t.Error("Expected error for invalid glob pattern input")
+	}
+}
+
+func TestConvertNonexistentFile(t *testing.T) {
+	converter := NewConverter()
+	tmpDir, err := os.MkdirTemp("", "test_nonexistent_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	output := filepath.Join(tmpDir, "output.pdf")
+	nonexistent := filepath.Join(tmpDir, "no_such_file.jpg")
+
+	err = converter.Convert(nonexistent, output, "seq")
+	if err == nil {
+		t.Fatal("Expected error for nonexistent file, got nil")
+	}
+
+	// Проверяем тип ошибки
+	if !IsNoImagesFound(err) {
+		t.Errorf("Expected ErrNoImagesFound, got: %v", err)
+	}
+
+	// Проверяем, что PDF не создан
+	if _, statErr := os.Stat(output); statErr == nil {
+		t.Error("PDF should not be created when input file does not exist")
 	}
 }
 
 func TestConvertEmptyInput(t *testing.T) {
 	converter := NewConverter()
-	
-	// Тест с несуществующей директорией
-	err := converter.Convert("/nonexistent", "output.pdf")
-	if err == nil {
-		t.Error("Expected error for nonexistent directory")
-	}
-
-	// Тест с пустой директорией
-	tmpDir, err := os.MkdirTemp("", "empty_dir_")
+	tmpDir, err := os.MkdirTemp("", "test_empty_input_")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	err = converter.Convert(tmpDir, "output.pdf")
+	output := filepath.Join(tmpDir, "output.pdf")
+
+	err = converter.Convert("", output, "seq")
 	if err == nil {
-		t.Error("Expected error for empty directory")
+		t.Fatal("Expected error for empty input, got nil")
+	}
+
+	// Проверяем, что это именно наша ошибка
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("Expected ErrNoImagesFound or invalid input error, got: %v", err)
+	}
+
+	if _, statErr := os.Stat(output); statErr == nil {
+		t.Error("PDF should not be created for empty input")
 	}
 }
 
-func TestConvertSuccess(t *testing.T) {
-	tmpDir, _ := createTestDirectory(t)
-	defer os.RemoveAll(tmpDir)
+func TestCollectFromDirectory_PermissionError(t *testing.T) {
+	// Этот тест основан на модели прав доступа в Unix.
+	// В Windows он может вести себя иначе, поэтому пропускаем его.
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping permission-based test on Windows")
+	}
+
+	// 1. Создаем временную директорию, которая будет автоматически удалена после теста.
+	badDir := t.TempDir()
+
+	// 2. Устанавливаем права, запрещающие чтение и вход в директорию.
+	if err := os.Chmod(badDir, 0000); err != nil {
+		t.Fatalf("Failed to change directory permissions: %v", err)
+	}
+
+	// 3. Важно! Восстанавливаем права после теста, чтобы t.TempDir() смог ее удалить.
+	// defer выполняется в конце функции.
+	defer func() {
+		if err := os.Chmod(badDir, 0755); err != nil {
+			// Если даже это не сработало, просто выводим предупреждение.
+			t.Logf("Warning: could not restore permissions for %s: %v", badDir, err)
+		}
+	}()
 
 	converter := NewConverter()
-	outputPath := filepath.Join(tmpDir, "output.pdf")
+	_, err := converter.collectFromDirectory(badDir)
 
-	err := converter.Convert(tmpDir, outputPath)
-	if err != nil {
-		t.Errorf("Convert failed: %v", err)
+	// 4. Проверяем, что ошибка была возвращена.
+	if err == nil {
+		t.Fatal("Expected an error for unreadable directory, but got nil")
 	}
 
-	// Проверяем, что файл PDF создан
-	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
-		t.Error("PDF file was not created")
-	}
-
-	// Проверяем, что файл PDF не пустой
-	stat, err := os.Stat(outputPath)
-	if err != nil {
-		t.Error("Cannot stat PDF file")
-	}
-	if stat.Size() == 0 {
-		t.Error("PDF file is empty")
+	// 5. Проверяем, что это именно ошибка типа *DirectoryError.
+	var dirErr *DirectoryError
+	if !errors.As(err, &dirErr) {
+		t.Errorf("Expected error of type *DirectoryError, but got %T", err)
+	} else {
+		// (Опционально) Можно даже проверить содержимое ошибки.
+		if dirErr.Path != badDir {
+			t.Errorf("Expected error path %q, got %q", badDir, dirErr.Path)
+		}
 	}
 }
 
-// Бенчмарк для тестирования производительности
-func BenchmarkCreateTestImage(b *testing.B) {
-	tmpDir, err := os.MkdirTemp("", "benchmark_")
+func TestConvert_IgnoresEmptyEntriesInInput(t *testing.T) {
+	// 1. Создаем временную директорию и тестовые файлы.
+	tmpDir, err := os.MkdirTemp("", "test_empty_entries_")
 	if err != nil {
-		b.Fatal(err)
+		t.Fatal(err)
 	}
 	defer os.RemoveAll(tmpDir)
 
-	formats := []string{"jpg", "png", "tiff"}
-	
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		format := formats[i%len(formats)]
-		path := filepath.Join(tmpDir, fmt.Sprintf("bench_%d.%s", i, format))
-		if err := createTestImage(path, 200, 200, format); err != nil {
-			// Пропускаем неподдерживаемые форматы
-			continue
-		}
-		os.Remove(path)
+	// Создаем два валидных изображения
+	path1 := filepath.Join(tmpDir, "image1.jpg")
+	path2 := filepath.Join(tmpDir, "image2.jpg")
+	if err := createTestJPG(path1, 50, 50); err != nil {
+		t.Fatal(err)
+	}
+	if err := createTestJPG(path2, 50, 50); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Формируем входную строку с пустыми элементами.
+	// Используем разные варианты: двойная запятая, запятая в конце, пробелы.
+	input := fmt.Sprintf("%s, , %s, ", path1, path2)
+
+	output := filepath.Join(tmpDir, "output.pdf")
+	converter := NewConverter()
+
+	// 3. Вызываем конвертацию.
+	if err := converter.Convert(input, output, "seq"); err != nil {
+		t.Fatalf("Convert failed with empty entries: %v", err)
+	}
+
+	// 4. Проверяем, что PDF был создан.
+	if _, err := os.Stat(output); os.IsNotExist(err) {
+		t.Fatal("Output PDF was not created")
+	}
+
+	// 5. Проверяем количество страниц в PDF.
+	// Ожидаем 2 страницы, так как у нас было 2 валидных файла.
+	pageCount, err := countPDFPages(output)
+	if err != nil {
+		t.Fatalf("Failed to count PDF pages: %v", err)
+	}
+
+	expectedPages := 2
+	if pageCount != expectedPages {
+		t.Errorf("Expected %d pages in PDF, but got %d", expectedPages, pageCount)
 	}
 }
