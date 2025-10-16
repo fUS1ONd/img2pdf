@@ -6,9 +6,14 @@ import (
 	"os"
 )
 
+// Прикол: можно наслаивать друг на друга их
+// Идея: сделать так, чтобы утилита либо создавала с нуля (нужно проверять название output на предмет существования)
+// либо чтобы утилита наслаивала на существующий output
+
 func main() {
 	var (
 		input  = flag.String("i", "", "Input directory or JPG files (space-separated)")
+		order  = flag.String("order", "seq", "default sequently order")
 		output = flag.String("o", "output.pdf", "Output PDF file path")
 		help   = flag.Bool("help", false, "Show help")
 	)
@@ -25,7 +30,7 @@ func main() {
 	}
 
 	converter := NewConverter()
-	if err := converter.Convert(*input, *output); err != nil {
+	if err := converter.Convert(*input, *output, *order); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -33,6 +38,7 @@ func main() {
 	fmt.Printf("Successfully converted to %s\n", *output)
 }
 
+// TODO: Добавить пояснение про order
 func printUsage() {
 	fmt.Println("Image to PDF Converter")
 	fmt.Println("\nSupported formats: JPG, JPEG, PNG, WEBP, TIFF")
