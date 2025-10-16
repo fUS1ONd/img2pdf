@@ -8,14 +8,19 @@ import (
 
 func main() {
 	var (
-		input  = flag.String("input", "", "Input directory or JPG files (comma-separated (,))")
-		output = flag.String("output", "output.pdf", "Output PDF file path")
+		input  = flag.String("i", "", "Input directory or JPG files (space-separated)")
+		output = flag.String("o", "output.pdf", "Output PDF file path")
 		help   = flag.Bool("help", false, "Show help")
 	)
 	flag.Parse()
 
-	if (*help) || (*input == "") {
+	if *help && *input == "" {
 		printUsage()
+		return
+	}
+
+	if !*help && *input == "" {
+		printInputHelp()
 		return
 	}
 
@@ -38,4 +43,12 @@ func printUsage() {
 	fmt.Println("  jpg2pdf -input \"image1.jpg,photo.png,scan.tiff\" -output result.pdf")
 	fmt.Println("\nOptions:")
 	flag.PrintDefaults()
+}
+
+func printInputHelp() {
+	fmt.Println("Image to PDF Converter")
+
+	fmt.Println("\nUsage:")
+	fmt.Println("  ./jpg2pdf -i \"image1.jpg,photo.png,scan.tiff\" -o result.pdf")
+	fmt.Println("  ./jpg2pdf -i ./images -o result.pdf")
 }
