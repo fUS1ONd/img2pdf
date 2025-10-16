@@ -16,7 +16,7 @@ Simple image to PDF converter written in Go.
 ```bash
 git clone https://github.com/fUS1ONd/img2pdf.git
 cd img2pdf
-go build -o img2pdf
+go build
 ```
 
 ### Binary release
@@ -27,11 +27,13 @@ Download the latest version from [Releases](https://github.com/fUS1ONd/img2pdf/r
 
 ```bash
 # Convert all images from directory
-./img2pdf -input ./photos -output result.pdf
+./img2pdf -i ./photos -o result.pdf
 
 # Convert specific files
-./img2pdf -input "photo1.jpg,image.png,scan.tiff" -output document.pdf
+./img2pdf -i "photo1.jpg,image.png,scan.tiff" -o document.pdf
 
+# Convert all in one line
+./img2pdf -i "photo1.jpg,photos/,scan.tiff,image.png" -order nam
 # Show help
 ./img2pdf -help
 ```
@@ -40,15 +42,22 @@ Download the latest version from [Releases](https://github.com/fUS1ONd/img2pdf/r
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `-input` | Directory or comma-separated list of files | required |
-| `-output` | Output PDF file path | `output.pdf` |
+| `-i` | Directory or comma-separated list of files | required |
+| `-o` | Output PDF file path | `output.pdf` |
+| `-order` | Set order that pages are saving in pdf | `seq` |
 | `-help` | Show help | - |
+
+*NEW* order types:
+ - sequently = `seq` (default)
+ - naming = `nam`
+ - modtime = `mod`
 
 ## Features
 
-- Automatic sorting by creation time
+- Sorting by sequently\modtime\naming
 - Support for different formats in one PDF
-- Simple command line interface
+- Simple friendly command line interface
+- Wonderful tests (converter cover ~90%)
 
 ## Development
 
