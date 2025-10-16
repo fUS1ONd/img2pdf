@@ -6,13 +6,6 @@ import (
 	"os"
 )
 
-// Прикол: можно наслаивать друг на друга их
-// Идея: сделать так, чтобы утилита либо создавала с нуля (нужно проверять название output на предмет существования)
-// либо чтобы утилита наслаивала на существующий output
-
-// -order=mod
-// -order=nam
-// -order=seq (default)
 func main() {
 	var (
 		input  = flag.String("i", "", "Input directory or JPG files (space-separated)")
