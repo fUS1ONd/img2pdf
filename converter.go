@@ -13,8 +13,8 @@ import (
 )
 
 type ImageInfo struct {
-	Path         string
-	CreationTime time.Time
+	Path    string
+	ModTime time.Time
 }
 
 type Converter struct{}
@@ -24,19 +24,16 @@ func NewConverter() *Converter {
 }
 
 func (c *Converter) Convert(input, output, order string) error {
+	if strings.TrimSpace(input) == "" {
+		return ErrInvalidInput
+	}
+
 	images := c.collectImages(input)
 
 	if len(images) == 0 {
-		return fmt.Errorf("no images found")
+		return ErrNoImagesFound
 	}
 
-	// По последовательности переданной порядок добавления в pdf
-
-	// -order=mod
-	// -order=nam
-	// -order=seq (default)
-
-	// TODO: Реализовать порядок по имени, по дате создания с отдельными флагами
 	return c.createPDF(images, output, order)
 }
 
@@ -47,6 +44,11 @@ func (c *Converter) collectImages(input string) []ImageInfo {
 
 	for _, file := range files {
 		file = strings.TrimSpace(file)
+
+		// Если -i afadf.jpg,,afafdadsf.jpg
+		if file == "" {
+			continue
+		}
 
 		if isDirectory(file) {
 			imagesFromDir, err := c.collectFromDirectory(file)
@@ -60,15 +62,21 @@ func (c *Converter) collectImages(input string) []ImageInfo {
 		}
 
 		if !hasImageExtension(file) {
-			fmt.Printf("Warning: skipping %s: No image's extension.\n", file)
+			fmt.Printf("Warning: %v\n", &InvalidExtensionError{
+				Path:      file,
+				Extension: filepath.Ext(file),
+			})
+
 			continue
-			// TODO: Ошибку сделать кастомную
-			// TODO: -i afadf.jpg,,afafdadsf.jpg TEST
 		}
 
 		info, err := c.getImageInfo(file)
 		if err != nil {
-			fmt.Printf("Warning: skipping %s: %v\n", file, err)
+			if os.IsNotExist(err) {
+				fmt.Printf("Warning: skipping %s: %v\n", file, &FileNotFoundError{Path: file})
+			} else {
+				fmt.Printf("Warning: skipping %s: %v\n", file, err)
+			}
 			continue
 		}
 		images = append(images, info)
@@ -82,7 +90,10 @@ func (c *Converter) collectFromDirectory(dir string) ([]ImageInfo, error) {
 
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			return &DirectoryError{
+				Path:   dir,
+				Reason: err.Error(),
+			}
 		}
 
 		if d.IsDir() || !hasImageExtension(path) {
@@ -109,41 +120,35 @@ func (c *Converter) getImageInfo(path string) (ImageInfo, error) {
 	}
 
 	return ImageInfo{
-		Path:         path,
-		CreationTime: stat.ModTime(),
+		Path:    path,
+		ModTime: stat.ModTime(),
 	}, nil
 }
 
 func (c *Converter) createPDF(images []ImageInfo, output string, order string) error {
+	switch order {
+	case "mod":
+		sort.Slice(images, func(i, j int) bool {
+			return images[i].ModTime.Before(images[j].ModTime)
+		})
+	case "nam":
+		sort.Slice(images, func(i, j int) bool {
+			return filepath.Base(images[i].Path) < filepath.Base(images[j].Path)
+		})
+	}
 
-	// TODO: Двойной перебор пофиксить
 	imagePaths := make([]string, len(images))
 	for i, img := range images {
 		imagePaths[i] = img.Path
 	}
 
-	var err error
-	switch order {
-	case "mod":
-		sort.Slice(images, func(i, j int) bool {
-			return images[i].CreationTime.Before(images[j].CreationTime)
-		})
-
-		for i, img := range images {
-			imagePaths[i] = img.Path
+	if err := api.ImportImagesFile(imagePaths, output, nil, nil); err != nil {
+		return &ConversionError{
+			Output: output,
+			Reason: err.Error(),
 		}
-
-		err = api.ImportImagesFile(imagePaths, output, nil, nil)
-		return err
-	case "nam":
-		sort.Strings(imagePaths)
-		err = api.ImportImagesFile(imagePaths, output, nil, nil)
-		return err
-	// Default = sequently
-	default:
-		err = api.ImportImagesFile(imagePaths, output, nil, nil)
-		return err
 	}
+	return nil
 }
 
 // TODO: А что если дадут dir и обычные файлы? как тогда?
