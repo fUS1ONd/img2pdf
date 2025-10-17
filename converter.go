@@ -40,9 +40,9 @@ func (c *Converter) Convert(input, output, order string) error {
 func (c *Converter) collectImages(input string) []ImageInfo {
 	var images []ImageInfo
 
-	files := strings.Split(input, ",")
+	files := strings.SplitSeq(input, ",")
 
-	for _, file := range files {
+	for file := range files {
 		file = strings.TrimSpace(file)
 
 		// Если -i afadf.jpg,,afafdadsf.jpg
